@@ -1,5 +1,5 @@
 # ios_module_News
-News widget is intended for displaying of news feed, defined in format of RSS-feed or Atom.
+News widget is intended for displaying of news feed, defined in format of RSS-feed or Atom. Also provides the ability to display news, added manually at the manage content panel.
 
 General features:
 
