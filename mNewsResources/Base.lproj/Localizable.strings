@@ -1,0 +1,42 @@
+/****************************************************************************
+ *                                                                           *
+ *  Copyright (C) 2014-2015 iBuildApp, Inc. ( http://ibuildapp.com )         *
+ *                                                                           *
+ *  This file is part of iBuildApp.                                          *
+ *                                                                           *
+ *  This Source Code Form is subject to the terms of the iBuildApp License.  *
+ *  You can obtain one at http://ibuildapp.com/license/                      *
+ *                                                                           *
+ ****************************************************************************/
+
+/* --- module RSS / News strings --- */
+
+/* Cannot load RSS feed */
+"mRSS_errorLoadingRSSMessage" = "Cannot load RSS feed";
+
+/* OK */
+"mRSS_errorLoadingRSSOkButtonTitle" = "OK";
+
+/* Error */
+"mRSS_errorLoadingRSSTitle" = "Error";
+
+/* Play media */
+"mRSS_playMediaLink" = "Play media";
+
+/* Read more... */
+"mRSS_readMoreLink" = "Read more...";
+
+/* Cancel */
+"mRSS_shareCancel" = "Cancel";
+
+/* Share via EMail */
+"mRSS_shareEmail" = "Share via EMail";
+
+/* Share via SMS */
+"mRSS_shareSMS" = "Share via SMS";
+
+/* Excellent news */
+"mRSS_sharingEmailSubject" = "Excellent news";
+
+/* I just read excellent news! */
+"mRSS_sharingMessage" = "I just read excellent news!";
