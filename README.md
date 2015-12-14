@@ -1,3 +1,4 @@
+Use our code to save yourself time on cross-platform, cross-device and cross OS version development and testing
 # ios_module_News
 News widget is intended for displaying of news feed, defined in format of RSS-feed or Atom. Also provides the ability to display news, added manually at the manage content panel.
 
