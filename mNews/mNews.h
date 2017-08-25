@@ -16,66 +16,39 @@
 
 @class Reachability;
 
-/**
- *  Main module class for widget RSS / News. Module entry point.
- */
+// Main module class for widget RSS / News. Module entry point.
 @interface mNewsViewController : UITableViewController<NSXMLParserDelegate,
-                                                      UIActionSheetDelegate,
                                                       UIScrollViewDelegate,
-                                                      MFMailComposeViewControllerDelegate,
-                                                      MFMessageComposeViewControllerDelegate,
                                                       EGORefreshTableHeaderDelegate,
                                                       IURLLoaderDelegate>
 
-/**
- *  Widget type
- */
+// Widget type
 @property (nonatomic, copy) NSString *widgetType;
 
-/**
- *  Use 24-hour time format
- */
+// Use 24-hour time format
 @property (nonatomic, assign) BOOL normalFormatDate;
 
-
-/**
- *  Add link to ibuildapp.com to sharing messages
- */
+// Add link to ibuildapp.com to sharing messages
 @property (nonatomic, assign) BOOL showLink;
 
-/**
- *  Allow sharing via Email
- */
+// Allow sharing via Email
 @property (nonatomic, assign) BOOL shareEMail;
 
-/**
- *  Allow sharing via SMS
- */
+// Allow sharing via SMS
 @property (nonatomic, assign) BOOL shareSMS;
 
-/**
- *  Allow adding notifications
- */
+// Allow adding notifications
 @property (nonatomic, assign) BOOL addNotifications;
 
-/**
- *  Allow adding events
- */
+// Allow adding events
 @property (nonatomic, assign) BOOL addEvents;
 
-
-/**
- *  Set widget parameters
- *
- *  @param params dictionary with parameters
- */
+// Set widget parameters
+// @param params dictionary with parameters
 - (void)setParams:(NSMutableDictionary *)params;
 
-/**
- *  Get widget title for statistics
- *
- *  @return widget title
- */
+// Get widget title for statistics
+// @return widget title
 - (NSString*)getWidgetTitle;
 
 @end

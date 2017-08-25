@@ -26,17 +26,15 @@
 /* Read more... */
 "mRSS_readMoreLink" = "Еще...";
 
-/* Cancel */
-"mRSS_shareCancel" = "Отмена";
-
-/* Share via EMail */
-"mRSS_shareEmail" = "Поделиться через EMail";
-
-/* Share via SMS */
-"mRSS_shareSMS" = "Поделиться через СМС";
-
 /* Excellent news */
 "mRSS_sharingEmailSubject" = "Отличная новость";
 
 /* I just read excellent news! */
 "mRSS_sharingMessage" = "Я только что прочитал отличную новость!";
+
+/* Share */
+"mRSS_sideBarShareAction" = "Поделиться";
+
+"mRSS_noInternetConnectionFound" = "Интернет-соединение не обнаружено";
+
+"localizedDateFormat" = "dd/MM/yyyy HH:mm a";

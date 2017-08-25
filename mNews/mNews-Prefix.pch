@@ -5,6 +5,10 @@
 #ifdef __OBJC__
   #import <Foundation/Foundation.h>
 
+#import "NSString+colorizer.h"
+#import "NSString+size.h"
+#import "NSString+UrlConvertion.h"
+
 #define resourceFromBundle(_resource_name_) (@"mNewsResources.bundle/" _resource_name_)
 
 #undef thisBundle
@@ -21,5 +25,6 @@
                                           value:@"" \
                                           table:nil]
 
+#define SYSTEM_VERSION_GREATER_THAN_OR_EQUAL_TO(v)  ([[[UIDevice currentDevice] systemVersion] compare:v options:NSNumericSearch] != NSOrderedAscending)
 
 #endif

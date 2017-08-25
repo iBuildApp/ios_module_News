@@ -13,11 +13,10 @@
 
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
-#import <SDWebImage/UIImageView+WebCache.h>
-
+#import <SDWebImage/SDImageCache.h>
+#import <SDWebImage/SDWebImagePrefetcher.h>
 #import "functionLibrary.h"
-#import "Reachability.h"
-#import "functionLibrary.h"
+#import "reachability.h"
 #import "downloadindicator.h"
 #import "downloadmanager.h"
 #import "NSURL+RootDomain.h"
@@ -30,22 +29,31 @@
 #import "NSString+size.h"
 #import "GTMNSString+HTML.h"
 
+#import "mNewsCell.h"
+#import "mNewsDetailsVC.h"
+#import <CommonCrypto/CommonDigest.h>
+#import "iphColorskinModel.h"
+#import "iphNavBarCustomization.h"
+
 #define kImageViewTag 555
 #define kPlaceholderImage @"photo_placeholder_small"
+
+// Javascript to resize images in webView
 #define kImagesWidthsAdjustingFrame @"<html>\n\
 <head>\n\
 <script type=\"text/javascript\">\n\
 function adjustImagesWidths(){\n\
-    var maxWidth = %f;\n\
-    var images=document.images;\n\
-    for (var i = 0; i < images.length; i++) {\n\
-        var image = images[i];\n\
-        var width = image.width;\n\
-        if(width > maxWidth){\n\
-            image.width = maxWidth;\n\
-            image.height *= maxWidth/width;\n\
-        }\n\
-    };\n\
+var maxWidth = %f;\n\
+var images=document.images;\n\
+for (var i = 0; i < images.length; i++) {\n\
+var image = images[i];\n\
+var width = image.width;\n\
+var height = image.height;\n\
+if(width > maxWidth){\n\
+image.width = maxWidth;\n\
+image.height = (maxWidth * height)/width;\n\
+}\n\
+};\n\
 }\n\
 </script>\n\
 </head>\n\
@@ -54,123 +62,54 @@ function adjustImagesWidths(){\n\
 </body>\n\
 </html>"
 
-#define GCDBackgroundThread dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)
-
 @interface mNewsViewController()
-{
-  NSAutoreleasePool *pool;
-}
 
-/**
- *  RSS URL string
- */
-@property(nonatomic,strong) NSString       *RSSPath;
-
-/**
- *  Background imageView
- */
-@property(nonatomic,retain) UIImageView    *backImgView;
-
-/**
- *  Text color
- */
-@property (nonatomic, strong) UIColor       *txtColor;
-
-/**
- *  Title color
- */
-@property (nonatomic, strong) UIColor       *titleColor;
-
-/**
- *  Background color
- */
-@property (nonatomic, strong) UIColor       *backgroundColor;
-
-/**
- *  Date label color
- */
-@property (nonatomic, strong) UIColor       *dateColor;
-
-/**
- *  Array with parsed rss data
- */
+// RSS URL string
+@property(nonatomic,strong) NSString *RSSPath;
+// Background imageView
+@property(nonatomic,strong) UIImageView *backImgView;
+// Text color
+@property (nonatomic, strong) UIColor *txtColor;
+//vTitle color
+@property (nonatomic, strong) UIColor *titleColor;
+// Background color
+@property (nonatomic, strong) UIColor *backgroundColor;
+// Date label color
+@property (nonatomic, strong) UIColor *dateColor;
+// Array with parsed rss data
 @property(nonatomic,strong) NSMutableArray *arr;
-
-
-/**
- *  EGORefreshTableHeaderView
- */
+// EGORefreshTableHeaderView
 @property (nonatomic, strong) EGORefreshTableHeaderView *refreshHeaderView;
-
-/**
- *  Reloading status
- */
-@property (nonatomic, assign) BOOL                       reloading;
-
-/**
- *  First loading indicator
- */
-@property (nonatomic, assign) BOOL                       bFirstLoading;
-
-/**
- *  Download indicator
- */
-@property (nonatomic, strong) TDownloadIndicator        *downloadIndicator;
-
-/**
- *  Buffer for current element
- */
+// Reloading status
+@property (nonatomic, assign) BOOL reloading;
+//First loading indicator
+@property (nonatomic, assign) BOOL bFirstLoading;
+// Download indicator
+@property (nonatomic, strong) TDownloadIndicator *downloadIndicator;
+// Buffer for current element
 @property (nonatomic, strong) NSMutableString *currentElement;
 
-/**
- *  Text for share
- */
-@property (nonatomic, copy  ) NSString        *smsText;
-
-/**
- *  Decorated text for share
- */
-@property (nonatomic, copy  ) NSString        *szShareHTML;
+@property (nonatomic, copy) NSString *isLight;
 
 @property (nonatomic, strong) Reachability    *hostReachable;
+@property (nonatomic, assign) BOOL mediaRSS; // YES if we parse media rss
+@property (nonatomic, assign) BOOL RSSFeed; // YES if datasource is RSS feed
 
-/**
- *  YES if we parse media rss
- */
-@property (nonatomic, assign) BOOL             mediaRSS;
+@property (nonatomic, strong) iphColorskinModel *colorSkin;
 
-/**
- *  YES if datasource is RSS feed
- */
-@property (nonatomic, assign) BOOL             RSSFeed;
+@property (nonatomic, strong) NSMutableArray *tableData;
+@property (nonatomic, assign) BOOL canUpdateTable;
+@property (nonatomic, assign) int finished;
+
+@property (nonatomic, strong) NSTimer *updateTableTimer;
 
 @end
 
 @implementation mNewsViewController
-@synthesize normalFormatDate,
-backImgView = _backImgView,
-downloadIndicator = _downloadIndicator,
-currentElement = _currentElement,
-smsText = _smsText,
-szShareHTML = _szShareHTML,
-hostReachable = _hostReachable,
-arr = _arr,
-mediaRSS,
-RSSFeed,
-txtColor,
-titleColor,
-backgroundColor,
-dateColor,
-showLink,
-shareEMail,
-shareSMS,
-addNotifications,
-addEvents,
-widgetType,
-RSSPath,
-bFirstLoading,
-refreshHeaderView,
-reloading;
+
+@synthesize colorSkin = _colorSkin;
+@synthesize tableData = _tableData;
+@synthesize updateTableTimer;
 
 #pragma mark - XML <data> parser
 
@@ -186,15 +125,15 @@ reloading;
   TBXMLElement element;
   [xmlElement_ getValue:&element];
 
-  NSMutableArray *contentArray = [[[NSMutableArray alloc] init] autorelease];
+  NSMutableArray *contentArray = [[NSMutableArray alloc] init];
   
   NSString *szTitle = @"";
   TBXMLElement *titleElement = [TBXML childElementNamed:@"title" parentElement:&element];
   if ( titleElement )
     szTitle = [TBXML textForElement:titleElement];
   
-  NSMutableDictionary *contentDict = [[[NSMutableDictionary alloc] init] autorelease];
-  [contentDict setObject:(szTitle ? szTitle : @"") forKey:@"title"];
+  NSMutableDictionary *contentDict = [[NSMutableDictionary alloc] init];
+  contentDict[@"title"] = (szTitle ? szTitle : @"");
   
     // processing tag <colorskin>
   TBXMLElement *colorskinElement = [TBXML childElementNamed:@"colorskin" parentElement:&element];
@@ -205,8 +144,8 @@ reloading;
     {
       NSString *colorElementContent = [TBXML textForElement:colorElement];
       
-      if ( [colorElementContent length] )
-        [contentDict setValue:colorElementContent forKey:[[TBXML elementName:colorElement] lowercaseString]];
+      if ( colorElementContent.length )
+        [contentDict setValue:colorElementContent forKey:[TBXML elementName:colorElement].lowercaseString];
       
       colorElement = colorElement->nextSibling;
     }
@@ -215,7 +154,7 @@ reloading;
   
     // 1. adding a zero element to array
   [contentArray addObject:contentDict];
-  
+
     // 2. search for tag <url> or <rss>
   TBXMLElement *urlElement = [TBXML childElementNamed:@"url" parentElement:&element];
   TBXMLElement *rssElement = [TBXML childElementNamed:@"rss" parentElement:&element];
@@ -225,9 +164,8 @@ reloading;
   {
     NSString *szRssURL = [TBXML textForElement:urlElement];
       // for compatibility with previous versions we'll add url to 1st (0) element
-    if ( [szRssURL length] )
-      [contentArray addObject:[NSDictionary dictionaryWithObject:szRssURL
-                                                          forKey:[TBXML elementName:urlElement]]];
+    if ( szRssURL.length )
+      [contentArray addObject:@{[TBXML elementName:urlElement]: szRssURL}];
   }
   else
   {
@@ -237,62 +175,54 @@ reloading;
     {
         // find tags: title, indextext, date, url, description
       NSMutableDictionary *objDictionary = [[NSMutableDictionary alloc] init];
-      
-        // define accessory structure
-      typedef struct tagTTagsForDictionary
-      {
-        const NSString *tagName;
-        const NSString *keyName;
-      }TTagsForDictionary;
 
-      const TTagsForDictionary parsedTags[] = { { @"title"      , @"title"            },
-        { @"description", @"description"      },
-        { @"date"       , @"date"             },
-        { @"indextext"  , @"description_text" },
-        { @"url"        , @"url"              } };
-      TBXMLElement *tagElement = newsElement->firstChild;
-      while( tagElement )
+      static NSDictionary<NSString *, NSString *> *tagToKeyMapping;
+      if (!tagToKeyMapping)
       {
-        NSString *szTag = [[TBXML elementName:tagElement] lowercaseString];
+        tagToKeyMapping = @{
+          @"title"       : @"title",
+          @"description" : @"description",
+          @"date"        : @"date",
+          @"indextext"   : @"description_text",
+          @"url"         : @"url"
+        };
+      }
 
-        for ( int i = 0; i < sizeof(parsedTags) / sizeof(parsedTags[0]); ++i )
-        {
-          if ( [szTag isEqual:parsedTags[i].tagName] )
-          {
-            NSString *tagContent = [TBXML textForElement:tagElement];
-            if ( [tagContent length] )
-              [objDictionary setObject:tagContent forKey:parsedTags[i].keyName];
-            break;
-          }
-        }
-        tagElement = tagElement->nextSibling;
+      for (TBXMLElement *tagElement = newsElement->firstChild;
+           tagElement; tagElement = tagElement->nextSibling)
+      {
+        NSString *tag = [TBXML elementName:tagElement].lowercaseString;
+        NSString *key = tagToKeyMapping[tag];
+        NSString *tagContent = [TBXML textForElement:tagElement];
+        if (key && tagContent.length)
+          objDictionary[key] = tagContent;
       }
       
-      if ( [objDictionary count] )
+      if ( objDictionary.count )
         [contentArray addObject:objDictionary];
-      [objDictionary release];
       
       newsElement = [TBXML nextSiblingNamed:@"news" searchFromElement:newsElement];
     }
   }
-  [params_ setObject:contentArray forKey:@"data"];
+  
+  params_[@"data"] = contentArray;
 }
 
 - (void)setDefaults:(NSArray *)base
 {
   self.arr = [NSMutableArray array];
   for( NSObject *obj in base )
-    [self.arr addObject:[[obj mutableCopy] autorelease]];
+    [self.arr addObject:[obj mutableCopy]];
 }
 
 - (void)setParams:(NSMutableDictionary *)params
 {
   if (params != nil)
   {
-    NSArray *data = [params objectForKey:@"data"];
-    NSDictionary *contentDict = [data objectAtIndex:0];
+    NSArray *data = params[@"data"];
+    NSDictionary *contentDict = data[0];
     
-    [self.navigationItem setTitle:[contentDict objectForKey:@"title"]];
+    (self.navigationItem).title = contentDict[@"title"];
     
     
       //      1 - background
@@ -303,26 +233,65 @@ reloading;
     
       // set colors
     
-    if ([contentDict objectForKey:@"color1"])
-      self.backgroundColor = [[contentDict objectForKey:@"color1"] asColor];
+    //---
+    // set values for ColorskinModel
+    _colorSkin = [[iphColorskinModel alloc] init];
     
-    if ([contentDict objectForKey:@"color3"])
-      self.titleColor = [[contentDict objectForKey:@"color3"] asColor];
+
+    NSString *colorskinValue = contentDict[@"islight"];
+    if(colorskinValue && colorskinValue.length)
+      _colorSkin.isLight = colorskinValue.boolValue;
     
-    if ([contentDict objectForKey:@"color4"])
-      self.txtColor = [[contentDict objectForKey:@"color4"] asColor];
+    NSString *color1Value = contentDict[@"color1"];
+    if(color1Value && color1Value.length)
+      _colorSkin.color1 = [color1Value asColor];
+    
+    if([color1Value.uppercaseString  isEqualToString:@"#FFFFFF"])
+      _colorSkin.color1IsWhite = YES;
+    
+    if([[color1Value uppercaseString]  isEqualToString:@"#000000"])
+      _colorSkin.color1IsBlack = YES;
+    
+    NSString *color2Value = contentDict[@"color2"];
+    if(color2Value && [color2Value length])
+      _colorSkin.color2 = [color2Value asColor];
+    
+    NSString *color3Value = contentDict[@"color3"];
+    if(color3Value && color3Value.length)
+      _colorSkin.color3 = [color3Value asColor];
+    
+    NSString *color4Value = contentDict[@"color4"];
+    if(color4Value && color4Value.length)
+      _colorSkin.color4 = [color4Value asColor];
+    
+    NSString *color5Value = contentDict[@"color5"];
+    if(color5Value && color5Value.length)
+      _colorSkin.color5 = [color5Value asColor];
+    //---
+    
+    if (contentDict[@"color1"])
+      self.backgroundColor = [contentDict[@"color1"] asColor];
+    
+    if (contentDict[@"color3"])
+      self.titleColor = [contentDict[@"color3"] asColor];
+    
+    if (contentDict[@"color4"])
+      self.txtColor = [contentDict[@"color4"] asColor];
+    
+    if (contentDict[@"isLight"])
+      self.isLight = contentDict[@"isLight"];
     
     self.dateColor = self.txtColor;
     
     
       // if there is no color scheme in configuration - define colors by old algorithm
     if (self.backgroundColor)
-      self.backImgView  = [[contentDict objectForKey:@"color1"] asImageView:nil];
+      self.backImgView  = [contentDict[@"color1"] asImageView:nil];
     else
-      self.backImgView = [[params objectForKey:@"backImg"] asImageView:nil];
+      self.backImgView = [params[@"backImg"] asImageView:nil];
     
     if (!self.txtColor)
-      self.txtColor     = [[params objectForKey:@"textColor"] asColor];
+      self.txtColor     = [params[@"textColor"] asColor];
     
     
       // if colors wasn't defined - set default colors:
@@ -338,22 +307,22 @@ reloading;
     
     
     
-    showLink         = [[params objectForKey:@"showLink"]         isEqual:@"1"];
-    normalFormatDate = [[params objectForKey:@"normalFormatDate"] isEqual:@"1"];
-    shareEMail       = [[params objectForKey:@"shareEMail"]       isEqual:@"1"];
-    shareSMS         = [[params objectForKey:@"shareSMS"]         isEqual:@"1"];
-    addNotifications = [[params objectForKey:@"addNotifications"] isEqual:@"1"];
-    addEvents        = [[params objectForKey:@"addEvents"]        isEqual:@"1"];
+    _showLink         = [params[@"showLink"]         isEqual:@"1"];
+    _normalFormatDate = [params[@"normalFormatDate"] isEqual:@"1"];
+    _shareEMail       = [params[@"shareEMail"]       isEqual:@"1"];
+    _shareSMS         = [params[@"shareSMS"]         isEqual:@"1"];
+    _addNotifications = [params[@"addNotifications"] isEqual:@"1"];
+    _addEvents        = [params[@"addEvents"]        isEqual:@"1"];
     
     
-    NSString *widgetTypeStr = [[params objectForKey:@"widgetType"] lowercaseString];
+    NSString *widgetTypeStr = [params[@"widgetType"] lowercaseString];
     
     if ( widgetTypeStr != nil && ( [widgetTypeStr isEqualToString:@"news"] ||
                                   [widgetTypeStr isEqualToString:@"rss"] ) )
     {
       NSRange range;
       range.location=1;
-      range.length=[data count]-1;
+      range.length=data.count-1;
       [self setDefaults:[data objectsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:range]]];
     }
     else
@@ -361,106 +330,80 @@ reloading;
   }
 }
 
-
 - (NSString*)getWidgetTitle
 {
-  if (widgetType && [widgetType isEqualToString:@"RSS"])
+  if (_widgetType && [_widgetType isEqualToString:@"RSS"])
     return @"RSS";
   else
     return @"News";
 }
 
-- (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil
+- (instancetype)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil
 {
 	self = [super initWithNibName:nibNameOrNil bundle:nibBundleOrNil];
   if ( self )
   {
-    showLink         = NO;
-    normalFormatDate = YES;
-    shareEMail       = NO;
-    shareSMS         = NO;
-    addNotifications = NO;
-    addEvents        = NO;
-    
-    _currentElement  = nil;
-    _smsText         = nil;
-    _szShareHTML     = nil;
-    _hostReachable   = nil;
-    _arr             = nil;
+    _showLink         = NO;
+    _normalFormatDate = YES;
+    _shareEMail       = NO;
+    _shareSMS         = NO;
+    _addNotifications = NO;
+    _addEvents        = NO;
     
     self.mediaRSS    = NO;
     self.RSSFeed     = NO;
-    
-    txtColor         = nil;
-    titleColor       = nil;
-    backgroundColor  = nil;
-    dateColor        = nil;
-    RSSPath          = nil;
-    _backImgView     = nil;
-    _downloadIndicator = nil;
     self.bFirstLoading = YES;
     self.reloading = NO;
-    self.refreshHeaderView = nil;
   }
 	return self;
 }
 
 - (void)dealloc
 {
-  self.currentElement  = nil;
-  self.smsText         = nil;
-  self.szShareHTML     = nil;
   
-  self.hostReachable   = nil;
   
   [self.downloadIndicator removeFromSuperview];
-  self.downloadIndicator = nil;
-	self.backImgView  = nil;
-	self.txtColor     = nil;
-  self.titleColor       = nil;
-  self.backgroundColor  = nil;
-  self.dateColor        = nil;
   
-  self.RSSPath      = nil;
-	self.arr          = nil;
-  self.refreshHeaderView = nil;
-  [super dealloc];
+  
+  
+  if ((self.updateTableTimer).valid)
+  {
+    [self.updateTableTimer invalidate];
+  }
+  
 }
 
 #pragma mark - View Lifecycle
 - (void)viewDidLoad
 {
-  self.navigationController.navigationBar.translucent = NO;
-  [self.navigationController setNavigationBarHidden:NO animated:YES];
-  [self.navigationItem setHidesBackButton:NO animated:YES];
-  [[self.tabBarController tabBar] setHidden:NO];
+  [iphNavBarCustomization setNavBarSettingsWhenViewDidLoadWithController:self];
   
-	if ( ![self.arr count] )
+	if ( !(self.arr).count )
     return;
   
     // show loading indicator on first loading
   self.bFirstLoading = YES;
   
-	NSString * path = [[[self.arr objectAtIndex:0] objectForKey:@"rss"] retain];
+	NSString * path = (self.arr)[0][@"rss"];
   self.mediaRSS = NO;
   self.RSSFeed  = NO;
 
-  self.tableView.separatorColor = [UIColor grayColor];
+  self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
 	
     //for use on mode @rss widget"
-	if ( !path && ![[self.arr objectAtIndex:0] objectForKey:@"description"])
-    path = [[[self.arr objectAtIndex:0] objectForKey:@"url"] retain];
-	if ( [path length] )
+	if ( !path && !(self.arr)[0][@"description"])
+    path = (self.arr)[0][@"url"];
+	if ( path.length )
 	{
     [self.arr removeAllObjects];
     self.RSSPath = path;
     NSLog(@"self.RSSPath = %@", self.RSSPath );
-    RSSFeed = YES;
+    _RSSFeed = YES;
     
-    self.refreshHeaderView = [[[EGORefreshTableHeaderView alloc] initWithFrame:CGRectMake( 0.0f,
+    self.refreshHeaderView = [[EGORefreshTableHeaderView alloc] initWithFrame:CGRectMake( 0.0f,
                                                                                           0.0f - self.tableView.bounds.size.height,
                                                                                           self.view.frame.size.width,
-                                                                                          self.tableView.bounds.size.height)] autorelease];
+                                                                                          self.tableView.bounds.size.height)];
     self.refreshHeaderView.delegate = self;
     [self.tableView addSubview:self.refreshHeaderView];
     
@@ -472,43 +415,43 @@ reloading;
       // load data by rss link
     [self reloadTableViewDataSource];
 	}
-	self.smsText     = nil;
-  self.szShareHTML = nil;
-  
   
 	if ( self.backImgView )
 	{
     self.backImgView.autoresizesSubviews = YES;
     self.backImgView.autoresizingMask    = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.backImgView.frame = self.tableView.bounds;
-		[self.tableView setBackgroundView:self.backImgView];
+		(self.tableView).backgroundView = self.backImgView;
 	}
-#ifdef __IPHONE_7_0
-  
+  self.view.backgroundColor = _colorSkin.color1;
+
   if ([self.tableView respondsToSelector:@selector(setSeparatorInset:)])
-    [self.tableView setSeparatorInset:UIEdgeInsetsZero];
+    (self.tableView).separatorInset = UIEdgeInsetsZero;
   
   if ([self.tableView respondsToSelector:@selector(setLayoutMargins:)])
-    [self.tableView setLayoutMargins:UIEdgeInsetsZero];
+    (self.tableView).layoutMargins = UIEdgeInsetsZero;
   
-#endif
+  [self generateTableData];
+
+  
   [super viewDidLoad];
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
   [super viewWillAppear:animated];
-    // forcibly rotate interface to portrait orientation:
-  if ( UIInterfaceOrientationIsLandscape( [[UIApplication sharedApplication] statusBarOrientation] ) )
-  {
-    [[UIDevice currentDevice] performSelector:NSSelectorFromString(@"setOrientation:")
-                                   withObject:(id)UIInterfaceOrientationPortrait];
-  }
-	[self.tableView reloadData];
+  [iphNavBarCustomization customizeNavBarWithController:self colorskinModel:_colorSkin];
 }
 
-#pragma mark -
+- (void)viewWillDisappear:(BOOL)animated
+{
+  [iphNavBarCustomization restoreNavBarWithController:self colorskinModel:_colorSkin];
+  
+  [super viewWillDisappear:animated];
+}
+
 #pragma mark Table delegate
+
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
 	return 1;
@@ -516,340 +459,224 @@ reloading;
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-	return [self.arr count];
+  return _tableData.count;//[self.arr count];
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-  NSURL* url = [self getCorrectImgUrlFromRssElement:[self.arr objectAtIndex:indexPath.row]];
-	
-	CGSize titleSize = [[[self.arr objectAtIndex:indexPath.row] objectForKey:@"title"]
-                      sizeForFont:[UIFont boldSystemFontOfSize:15]
-                      limitSize:url?CGSizeMake(220, 40):CGSizeMake(280, 40)
-                      nslineBreakMode:NSLineBreakByTruncatingTail];
-	
-  NSString *descr=[[self.arr objectAtIndex:indexPath.row] objectForKey:@"description_text"];
-	if ( !descr )
-    descr = @"";
+  CGFloat cellWidth = tableView.frame.size.width;
   
-	CGSize descrSize = [descr
-                      sizeForFont:[UIFont systemFontOfSize:13]
-                      limitSize:url?CGSizeMake(220, 40):CGSizeMake(290, 40)
-                      nslineBreakMode:NSLineBreakByTruncatingTail];
+  NSMutableDictionary *dict = _tableData[indexPath.row];
   
-	CGFloat res = descrSize.height + titleSize.height +10;
-  
-	if (url && res<75)
-    res=75;
-  
-	NSString *date=[[self.arr objectAtIndex:indexPath.row] objectForKey:@"date"];
-	
-	if ( date )
-    res+=30;
-  
-	return res;
-}
+  UIImage *newsImage = nil;
 
--(void)updateCellWithEmptyImage:(UITableViewCell *)cell{
-  UILabel *lblTitle = (UILabel *)[cell viewWithTag:1];
-  UILabel *lblDescr = (UILabel *)[cell viewWithTag:4];
-  UILabel *lblTempDate = (UILabel *)[cell viewWithTag:2];
-    lblTitle.frame = CGRectUnion(lblTitle.frame, CGRectOffset(lblTitle.frame, 7 - lblTitle.frame.origin.x, 0.0f));
-    lblDescr.frame = CGRectUnion(lblDescr.frame, CGRectOffset(lblDescr.frame, 7 - lblDescr.frame.origin.x, 0.0f));
-  
-    CGFloat dateOffsetY = cell.frame.size.height - lblTempDate.frame.origin.y - 35.0f;
-    lblTempDate.frame = CGRectOffset(lblTempDate.frame, 0.0f, dateOffsetY);
-}
-
-/**
- * Method for sophisticated image setting for news entry.
- * In case of failure we try to send request with unescaped url string, 
- * because we've encountered a bug with facebook feed which had url-encoded img srcs
- */
--(void)setImageViewOnCell:(UITableViewCell*)cell
-                  withURL:(NSURL*)url
-           fromRssElement:(NSMutableDictionary *)rssElement
-{
-  UIImageView *imageView = (UIImageView*)[cell.contentView viewWithTag:kImageViewTag];
-  
-  SDWebImageSuccessBlock successBlock = ^(UIImage *image, BOOL cached)
-  {
-    if ( CGSizeEqualToSize( image.size, CGSizeZero ) ||
-        CGSizeEqualToSize( image.size, CGSizeMake( 1.f, 1.f )))
-    {
-      [imageView setHidden:YES];
-      [self setImgSrc:nil forRssItem:rssElement];
-      [self performSelectorOnMainThread:@selector(updateCellWithEmptyImage:) withObject:cell waitUntilDone:NO];
-    } else {
-      imageView.contentMode = UIViewContentModeScaleAspectFill;
-      [imageView setHidden:NO];
-    }
-  };
-  
-  SDWebImageFailureBlock failureBlockWithImageViewHiding = ^(NSError *error)
-  {
-    imageView.contentMode = UIViewContentModeScaleAspectFit;
-    [imageView setHidden:YES];
-    [self setImgSrc:nil forRssItem:rssElement];
-    [self performSelectorOnMainThread:@selector(updateCellWithEmptyImage:) withObject:cell waitUntilDone:NO];
-  };
-  
-  SDWebImageFailureBlock failureBlockWithUnescapedURLRetry = ^(NSError *error)
-  {
-    NSString *URLString = [url absoluteString];
-    NSString *escapedURLString = [URLString gtm_stringByUnescapingFromHTML];
+  NSString *URLString = dict[@"headerImageUrl"];
+  if (URLString)
+    newsImage = [[SDImageCache sharedImageCache] imageFromKey:URLString];
     
-    if([URLString caseInsensitiveCompare:escapedURLString] != NSOrderedSame){
-      NSURL *unescapedURL = [NSURL URLWithString:escapedURLString];
-      //could not set it after actual download succeeds, so it's not guaranteed to have the coorect URL after all
-      //nonetheless, if we've got here, we did not have correct URL anyway
-      [self setImgSrc:escapedURLString forRssItem:rssElement];
+  NSString *titleText = dict[@"titleText"];
+  NSString *dateText = dict[@"dateText"];
   
-        [self setImageView:imageView
-                   withURL:unescapedURL
-                   success:successBlock
-                   failure:failureBlockWithImageViewHiding];
-      
-    } else {
-      failureBlockWithImageViewHiding(nil);
-    }
-  };
   
-  [self setImageView:imageView
-             withURL:url
-             success:successBlock
-             failure:failureBlockWithUnescapedURLRetry];
+  
+  BOOL lastCell = (indexPath.row == _tableData.count - 1)? YES : NO;
+  
+  CGFloat result = [mNewsCell heightForCellWithNewsImage:newsImage title:titleText date:dateText cellWidth:cellWidth hasImage:(newsImage != nil) lastCell:lastCell];
+  
+  return result;
 }
 
--(void)setImageView:(UIImageView *)imageView
-            withURL:(NSURL*)url
-            success:(SDWebImageSuccessBlock)success
-            failure:(SDWebImageFailureBlock)failure
-{
-  [imageView setImageWithURL:url
-            placeholderImage:[UIImage imageNamed:kPlaceholderImage]
-                     options:SDWebImageRetryFailed
-                   andResize:CGSizeMake( 64.f, 64.f )
-             withContentMode:UIViewContentModeScaleAspectFit
-                     success:success
-                     failure:failure
-   ];
+- (void) updateTable {
+
+  if(_canUpdateTable == YES)
+  {
+    _canUpdateTable = NO;
+    
+    [UIView animateWithDuration:0 animations:^{
+      [self.tableView reloadData];
+    } completion:^(BOOL finished) {
+      
+      _canUpdateTable = YES;
+    }];
+  }
 }
+
+- (BOOL) tableHasUnloadedImages {
+
+  for (NSDictionary *dict in _tableData)
+  {
+    NSString *URLString = dict[@"headerImageUrl"];
+    if (URLString && ![[SDImageCache sharedImageCache] imageFromKey:URLString fromDisk:NO])
+      return YES;
+  }
+  
+  return NO;
+}
+
+- (void) generateTableData {
+  
+  _canUpdateTable = NO;
+  
+  long int count = (self.arr).count;
+  
+  if(_tableData)
+  {
+    _tableData = nil;
+  }
+  
+  _tableData = [[NSMutableArray alloc] init];
+  NSMutableArray<NSURL *> *URLsToPrefetch = [NSMutableArray new];
+  
+  for(int i = 0; i < count; i++)
+  {
+    NSString *titleText = [[functionLibrary stringByReplaceEntitiesInString:(self.arr)[i][@"title"]] htmlToTextFast];
+    
+    NSDate *dateDate = [functionLibrary dateFromInternetDateTimeString:(self.arr)[i][@"date"]];
+
+    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
+    [self setupDateFormatterForcingGMTAndHourFormat:dateFormatter];
+    NSString *date_s = [dateFormatter stringFromDate:dateDate];
+    NSString *date_str = (self.arr)[i][@"date_text"];
+    NSString *dispDate = [NSString string];
+    if (date_str) dispDate =[date_str stringByReplacingOccurrencesOfString:@"+0000" withString:@""];
+    if (date_s) dispDate = [date_s stringByReplacingOccurrencesOfString:@"+0000" withString:@""];
+    
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:
+                                  @"([0-9][0-9]?:[0-9][0-9])(:[0-9][0-9])" options:0 error:nil];
+    
+    NSMutableString* mutDate = [[NSMutableString alloc] init];
+    [mutDate setString: dispDate];
+    [regex replaceMatchesInString:mutDate options:0 range:NSMakeRange(0, mutDate.length) withTemplate:@"$1"];
+    (self.arr)[i][@"disp_date"] = mutDate;
+    
+    
+    NSMutableDictionary *dict = [[NSMutableDictionary alloc] init];
+    
+    dict[@"titleText"] = titleText;
+    dict[@"dateText"] = mutDate;
+    //---
+    NSString *youtubeDescription = (self.arr)[i][@"mediaDescription"];
+    if(youtubeDescription && youtubeDescription.length)
+      dict[@"youtubeDescription"] = youtubeDescription;
+    //---
+    [_tableData addObject:dict];
+    
+    NSMutableDictionary *rssElement = (self.arr)[i];
+    NSURL* url = [self getCorrectImgUrlFromRssElement:rssElement];
+    
+    if(url && [url.absoluteString rangeOfString:@"http://www.youtu"].location != NSNotFound)
+    {
+      url = nil;
+      [self setImgSrc:nil forRssItem:rssElement];
+    }
+    
+    if(url)
+    {
+      dict[@"headerImageUrl"] = url.absoluteString;
+      [URLsToPrefetch addObject:url];
+    }
+  }
+  
+  [[SDWebImagePrefetcher sharedImagePrefetcher] prefetchURLs:URLsToPrefetch];
+  
+  if(self.updateTableTimer)
+  {
+    if ((self.updateTableTimer).valid)
+    {
+      [self.updateTableTimer invalidate];
+      self.updateTableTimer = nil;
+    }
+  }
+  
+  self.updateTableTimer = [NSTimer scheduledTimerWithTimeInterval:1.0f
+                                                         target:self
+                                                       selector:@selector(checkTableUpdates)
+                                                       userInfo:nil
+                                                        repeats:YES];
+
+  _canUpdateTable = YES;
+}
+
+-(void)checkTableUpdates {
+  
+  [self updateTable];
+  
+  BOOL hasUnloaded = [self tableHasUnloadedImages];
+  if(hasUnloaded == NO)
+  {
+    if(self.updateTableTimer)
+    {
+      if ((self.updateTableTimer).valid)
+      {
+        [self.updateTableTimer invalidate];
+        self.updateTableTimer = nil;
+      }
+    }
+  }
+}
+
+
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-  UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell"];
   
-  if (cell == nil) {
-		cell = [self getCellContentView:@"Cell"];
+  mNewsCell *cell = (mNewsCell *)[tableView dequeueReusableCellWithIdentifier:@"Cell"];
+  
+  if (cell == nil)
+  {
+    cell = [[mNewsCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"Cell"];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.backgroundColor = [UIColor clearColor];
   }
-	CGRect frame;
   
-  UIImageView *imageView = (UIImageView*)[cell.contentView viewWithTag:kImageViewTag];
-  NSMutableDictionary *rssElement = [self.arr objectAtIndex:indexPath.row];
+  NSMutableDictionary *dict = _tableData[indexPath.row];
+  
+  //----
+  
+  NSMutableDictionary *rssElement = (self.arr)[indexPath.row];
   NSURL* url = [self getCorrectImgUrlFromRssElement:rssElement];
   
-  if(url && [url.absoluteString rangeOfString:@"http://www.youtu"].location != NSNotFound){
+  if(url && [url.absoluteString rangeOfString:@"http://www.youtu"].location != NSNotFound)
+  {
     url = nil;
     [self setImgSrc:nil forRssItem:rssElement];
-    [self performSelectorOnMainThread:@selector(updateCellWithEmptyImage:) withObject:cell waitUntilDone:NO];
   }
-  
-  if ( url )
-  {
-    [self setImageViewOnCell:cell
-                     withURL:url
-              fromRssElement:rssElement];
-  }
-  else
-  {
-    [imageView setHidden:YES];
-  }
-  
-	UILabel *lblTitle =  (UILabel *)[cell viewWithTag:1];
-	if (url)
-    lblTitle.frame = CGRectMake(75, 8, 220, 40);
-	else
-    lblTitle.frame = CGRectMake(7, 8, cell.frame.size.width-30, 40);
-  
-	lblTitle.text = [[functionLibrary stringByReplaceEntitiesInString:[[self.arr objectAtIndex:indexPath.row] objectForKey:@"title"]] htmlToTextFast];
-  
-  
-	CGSize titleSize = [lblTitle.text
-                      sizeForFont:lblTitle.font
-                      limitSize:lblTitle.frame.size
-                      nslineBreakMode:lblTitle.lineBreakMode];
-	frame = lblTitle.frame;
-	frame.size.height=titleSize.height;
-	lblTitle.frame=frame;
+  //-----
 
-  NSString *descr=[[self.arr objectAtIndex:indexPath.row] objectForKey:@"description_text"];
-	if ( !descr )
-    descr = @"";
-	UILabel *lblDescr = (UILabel *)[cell viewWithTag:4];
+  NSString *URLString = dict[@"headerImageUrl"];
+  cell.newsImage = (URLString ? [[SDImageCache sharedImageCache] imageFromKey:URLString] : nil);
+  cell.hasImage = (cell.newsImage != nil);
+  cell.titleText = dict[@"titleText"];
+  cell.dateText = dict[@"dateText"];
+  cell.titleColor = [UIColor blackColor];
+  cell.dateColor = [[UIColor blackColor] colorWithAlphaComponent:0.5f];
   
-	if (url)
-    lblDescr.frame = CGRectMake(75, titleSize.height+5, 220, 40);
-	else
-    lblDescr.frame = CGRectMake(7, titleSize.height+5, cell.frame.size.width-30, 40);
+  BOOL lastCell = (indexPath.row == _tableData.count - 1)? YES : NO;
   
-  NSString *desc = [[[functionLibrary stringByReplaceEntitiesInString:descr] htmlToNewLinePreservingTextFast] truncate];
-  [lblDescr setText: [desc stringByReplaceCharacterSet:[NSCharacterSet newlineCharacterSet] withString:@" "]];
+  cell.lastCell = lastCell;
   
-  CGSize descrSize = [lblDescr.text
-                      sizeForFont:lblDescr.font
-                      limitSize:lblDescr.frame.size
-                      nslineBreakMode:lblDescr.lineBreakMode];
-  
-	frame=lblDescr.frame;
-	frame.size.height=descrSize.height;
-	lblDescr.frame=frame;
-  
-	UILabel *lblTempDate =  (UILabel *)[cell viewWithTag:2];
-  
-	lblTempDate.frame = CGRectMake(7, [self tableView:tableView heightForRowAtIndexPath:indexPath]-35, cell.frame.size.width-30, 40);
-  
-  NSDate *dateDate = [functionLibrary dateFromInternetDateTimeString:[[self.arr objectAtIndex:indexPath.row] objectForKey:@"date"]];
-  
-  NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-  [self setupDateFormatterForcingGMTAndHourFormat:dateFormatter];
-  
-  NSString *date_s = [dateFormatter stringFromDate:dateDate];
-  
-  
-  [dateFormatter release];
-  
-  NSString *date_str = [[self.arr objectAtIndex:indexPath.row] objectForKey:@"date_text"];
-  
-  NSString *dispDate = [NSString string];
-  if (date_str) dispDate =[date_str stringByReplacingOccurrencesOfString:@"+0000" withString:@""];
-
-  if (date_s) dispDate = [date_s stringByReplacingOccurrencesOfString:@"+0000" withString:@""];
-
-  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:
-                                @"([0-9][0-9]?:[0-9][0-9])(:[0-9][0-9])" options:0 error:nil];
-  
-  NSMutableString* mutDate = [[NSMutableString alloc] init];
-  [mutDate setString: dispDate];
-  
-  [regex replaceMatchesInString:mutDate options:0 range:NSMakeRange(0, [mutDate length]) withTemplate:@"$1"];
-  
-  lblTempDate.text = mutDate;
-  [[self.arr objectAtIndex:indexPath.row] setObject:mutDate forKey:@"disp_date"];
-  
-  UIImageView *indicatorImageView = [[[UIImageView alloc] initWithFrame: (CGRect){300, 29, 9, 14}] autorelease];
-  if ([self.backgroundColor isLight])
-    indicatorImageView.image = [UIImage imageNamed: resourceFromBundle(@"mNews_detail")];
-  else
-    indicatorImageView.image = [UIImage imageNamed: resourceFromBundle(@"mNews_detail_light")];
-  cell.accessoryView = indicatorImageView;
   return cell;
 }
 
 - (void) setupDateFormatterForcingGMTAndHourFormat:(NSDateFormatter *) dateFormatter
 {
-  if (self.normalFormatDate)
-  {
-    static NSString *twentyFourHoursFormat = @"EEE, d MMMM yyyy HH:mm";
-    [dateFormatter setDateFormat:twentyFourHoursFormat];
-  }
-  else
-  {
-    static NSString *twelveHoursFormat = @"EEE, d MMMM yyyy h:mm a";
-    [dateFormatter setDateFormat:twelveHoursFormat];
-  }
-  
-  static NSString *gmtName = @"GMT";
-  
-  [dateFormatter setTimeZone:[NSTimeZone timeZoneWithName:gmtName]];
-}
 
-- (UITableViewCell *) getCellContentView:(NSString *)cellIdentifier
-{
-	CGRect CellFrame = CGRectMake(0, 0, 320, 90);
-	
-  UITableViewCell *cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellIdentifier] autorelease];
-  
-  if ([cell respondsToSelector:@selector(setLayoutMargins:)])
-  {
-    [cell setPreservesSuperviewLayoutMargins:NO];
-    [cell setLayoutMargins:UIEdgeInsetsZero];
-  }
-  
-  cell.backgroundColor = [UIColor clearColor];
-  
-	if ( !self.backImgView )
-  {
-    UIImageView *backImage = [[UIImageView alloc] initWithFrame:CellFrame];
-    backImage.image = [UIImage imageNamed:resourceFromBundle(@"mNews_bcgrd.png")];
-    [cell setBackgroundView:backImage];
-    [backImage release];
-  }
-	
-	UILabel *lblTemp = [[UILabel alloc] init];
-	lblTemp.tag = 1;
-	lblTemp.textColor = self.titleColor;
-	lblTemp.numberOfLines = 2;
-	lblTemp.font = [UIFont boldSystemFontOfSize:15];
-	lblTemp.backgroundColor = [UIColor clearColor];
-	[cell.contentView addSubview:lblTemp];
-	[lblTemp release];
-	
-	lblTemp = [[UILabel alloc] init];
-	lblTemp.tag = 2;
-	lblTemp.frame = CGRectMake(75, 24, 220, 50);
-	lblTemp.textColor = self.dateColor;
-	lblTemp.font = [UIFont systemFontOfSize:11];
-	lblTemp.backgroundColor = [UIColor clearColor];
-	[cell.contentView addSubview:lblTemp];
-	[lblTemp release];
-	
-	UILabel *descr = [[UILabel alloc] init];
-	descr.tag = 4;
-	descr.textColor = self.txtColor;
-	descr.font = [UIFont systemFontOfSize:13];
-	descr.backgroundColor = [UIColor clearColor];
-	descr.numberOfLines = 2;
-	[cell.contentView addSubview:descr];
-	[descr release];
-	
-	UIImageView *img = [[UIImageView alloc] initWithFrame:CGRectMake(8, 8, 60, 60)];
-  [img setContentMode:UIViewContentModeScaleAspectFill];
-  [img setClipsToBounds:YES];
-	[img.layer setBorderColor: [[UIColor lightGrayColor] CGColor]];
-	[img.layer setBorderWidth: 1.0];
-	img.tag = kImageViewTag;
-	[cell.contentView addSubview:img];
-	[img setHidden:true];
-	[img release];
-  
-  UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:
-                                      UIActivityIndicatorViewStyleGray];
-  spinner.frame = CGRectMake(30, 30, 15, 15);
-  spinner.backgroundColor = [UIColor whiteColor];
-  spinner.tag = 556;
-  [cell.contentView addSubview:spinner];
-  [spinner setHidden:true];
-  [spinner release];
-	
-	return cell;
+  [dateFormatter setDateFormat:NSBundleLocalizedString(@"localizedDateFormat",@"MM/dd/yyyy HH:mm a")];
 }
 
   // Override to support row selection in the table view.
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
-	NSDictionary *arrElement = [self.arr objectAtIndex:indexPath.row];
+
+	NSDictionary *arrElement = (self.arr)[indexPath.row];
 	
-	NSString *link         = [arrElement objectForKey:@"link"];
-  NSString *mediaType    = [arrElement objectForKey:@"mediaType"];
-  NSString *mediaURL     = [arrElement objectForKey:@"mediaURL"];
-  NSString *mediaPlayer  = [arrElement objectForKey:@"mediaPlayer"];
-  NSString *enclosureURL = [arrElement objectForKey:@"enclosureURL"];
+	NSString *link         = arrElement[@"link"];
+  NSString *mediaType    = arrElement[@"mediaType"];
+  NSString *mediaURL     = arrElement[@"mediaURL"];
+  NSString *mediaPlayer  = arrElement[@"mediaPlayer"];
+  NSString *enclosureURL = arrElement[@"enclosureURL"];
   NSString *readMoreURL  = nil;
-  
-  self.smsText     = nil;
-  self.szShareHTML = nil;
   
   if (mediaPlayer)
     link = mediaPlayer;
@@ -866,25 +693,65 @@ reloading;
       link = enclosureURL;
     }
   }
+
+  mNewsDetailsVC *detailsVC = [[mNewsDetailsVC alloc] init];
+  detailsVC.colorSkin = _colorSkin;
+  NSString *detailsContent = nil;
+  NSString *mailSharingContent = nil;
+
+  NSString *dateString = arrElement[@"disp_date"];
   
-  mWebVCViewController *webVC = [[[mWebVCViewController alloc] init] autorelease];
-  NSString *szDescription = [arrElement objectForKey:@"description"];
+  dateString = [dateString stringByReplacingOccurrencesOfString:@"+0000" withString:@""];
+  if ( !dateString )
+    dateString = @"";
+  
+  NSDictionary *dict = _tableData[indexPath.row];
+  
+  detailsVC.titleText = arrElement[@"title"];
+  detailsVC.dateText = dateString;
+
+  NSString *URLString = dict[@"headerImageUrl"];
+  detailsVC.headerImage = (URLString ? [[SDImageCache sharedImageCache] imageFromKey:URLString] : nil);
+  detailsVC.showLink = self.showLink;
+  
+  detailsVC.shareEMail = _shareEMail;
+  detailsVC.shareSMS = _shareSMS;
+  detailsVC.youtubeVideo = NO;
+  
+  NSString *backgroundHex = [self hexStringFromColor:_colorSkin.color1];
+  NSString *textColorHex = [self hexStringFromColor:_colorSkin.color4];
+   NSString *anchorColorHex = [self hexStringFromColor:_colorSkin.color5];// 3399ff
+
+
+  NSString *szDescription = arrElement[@"description"];
 	if (link)
 	{
-    NSString *date = [arrElement objectForKey:@"disp_date"];
+    NSString *date = arrElement[@"disp_date"];
     
     if ( !date )
       date = @"";
     
-    self.smsText = [NSString stringWithFormat:@"%@ %@\n %@\n %@", NSBundleLocalizedString(@"mRSS_sharingMessage", @"I just read excellent news!"),
-                    [arrElement objectForKey:@"title"],
+     detailsVC.smsSharingText = [NSString stringWithFormat:@"%@ %@\n %@\n %@", NSBundleLocalizedString(@"mRSS_sharingMessage", @"I just read excellent news!"),
+                    arrElement[@"title"],
                     (szDescription ? [szDescription htmlToTextFast] : @""),
                     link];
     
     NSRange pos = [link rangeOfString:@"youtu"];
     if ( pos.location != NSNotFound )
     {
-      webVC.content = [NSString stringWithFormat:@"<style>a { text-decoration: none; color:#3399FF;}</style><span style='font-family:Helvetica; font-size:16px; font-weight:bold;'>%@</span><br><span style='font-family:Helvetica; font-size:12px;  color:#555555;' >%@</span><br><br>%@<br><br><embed id=\"yt\" src=\"%@\" type=\"application/x-shockwave-flash\"</embed>",[arrElement objectForKey:@"title"],[date stringByReplacingOccurrencesOfString:@"+0000" withString:@""],[arrElement objectForKey:@"description"],link];
+      NSString *description = arrElement[@"description"] != nil ?arrElement[@"description"]: @"";
+      
+      mailSharingContent = [NSString stringWithFormat:@"<style>a { text-decoration: none; color:#3399FF;}</style><span style='font-family:Helvetica; font-size:16px; font-weight:bold;'>%@</span><br><span style='font-family:Helvetica; font-size:12px;  color:#555555;' >%@</span><br><br>%@<br><br><embed id=\"yt\" src=\"%@\" type=\"application/x-shockwave-flash\"</embed>",arrElement[@"title"],[date stringByReplacingOccurrencesOfString:@"+0000" withString:@""],arrElement[@"description"],link];
+      
+      /*
+      detailsContent = [NSString stringWithFormat:@"<style>body {background: #%@; font-family:Helvetica; font-size:15px; color:#%@;  margin-left: 15px;margin-right: 15px;} a { text-decoration: none; color:#%@;}</style>%@<br/><embed id=\"yt\" src=\"%@\" type=\"application/x-shockwave-flash\"</embed>", backgroundHex, textColorHex, anchorColorHex, description,link];*/
+      
+      detailsContent = [NSString stringWithFormat:@"<style>body {background: #%@; font-family:Helvetica; font-size:15px; color:#%@;  margin-left: 15px;margin-right: 15px;} a { text-decoration: none; color:#%@;}</style>%@<br/>", backgroundHex, textColorHex, anchorColorHex, description];
+      
+      detailsVC.youtubeVideo = YES;
+      detailsVC.youtubeLink = link;
+      
+      detailsVC.headerImage = nil;
     }
     else
     {
@@ -895,7 +762,7 @@ reloading;
       else
         scheme = @"http";
       
-      NSString *description = [arrElement objectForKey:@"description"];
+      NSString *description = arrElement[@"description"];
       
         // processing image urls without scheme:
       description = [description stringByReplacingOccurrencesOfString:@"img src=\"//" withString:[NSString stringWithFormat:@"img src=\"%@://", scheme]];
@@ -905,19 +772,34 @@ reloading;
       
       description = [functionLibrary stringByReplaceEntitiesInString:description];
       
-    
-      NSMutableString *htmlCode = [NSMutableString stringWithFormat:@"<div style=\"overflow:hidden;\"><style>a { text-decoration: none; color:#3399FF;}</style><span style='font-family:Helvetica; font-size:16px; font-weight:bold;'>%@</span><br /><span style='font-family:Helvetica; font-size:12px;  color:#555555;' >%@</span><br><br>%@<br><br></div>",[arrElement objectForKey:@"title"],[date stringByReplacingOccurrencesOfString:@"+0000" withString:@""], description];
+      NSMutableString *mailSharingHtmlCode = [NSMutableString stringWithFormat:@"<div style=\"overflow:hidden;\"><style>a { text-decoration: none; color:#3399FF;}</style><span style='font-family:Helvetica; font-size:16px; font-weight:bold;'>%@</span><br /><span style='font-family:Helvetica; font-size:12px;  color:#555555;' >%@</span><br><br>%@<br><br></div>",arrElement[@"title"],[date stringByReplacingOccurrencesOfString:@"+0000" withString:@""], description];
+        float wid = self.view.frame.size.width - 20.0f;
+        NSMutableString *htmlCode = [NSMutableString stringWithFormat:@"<style>body {background: #%@; font-family:Helvetica; font-size:15px; color:#%@; margin-left: 15px; margin-right: 15px;}</style><div style=\"overflow:hidden; width: %dpx;\"><style>a { text-decoration: none; color:#%@;}</style>%@</div>", backgroundHex, textColorHex, (int)wid, anchorColorHex, description];
       
         // if url is correct and content is available, then add link for read more...
       
       if (readMoreURL)
       {
+        [htmlCode appendString:@"<br/>"];
+      
         [htmlCode appendString:[self getHtmlForLink:link withTag:NSBundleLocalizedString(@"mRSS_playMediaLink", @"Play media")]];
         
         [htmlCode appendString:[self getHtmlForLink:readMoreURL withTag:NSBundleLocalizedString(@"mRSS_readMoreLink", @"Read more...")]];
+        
+        
+        [mailSharingHtmlCode appendString:[self getHtmlForLink:link withTag:NSBundleLocalizedString(@"mRSS_playMediaLink", @"Play media")]];
+        
+        [mailSharingHtmlCode appendString:[self getHtmlForLink:readMoreURL withTag:NSBundleLocalizedString(@"mRSS_readMoreLink", @"Read more...")]];
       }
       else
+      {
+        
+        [htmlCode appendString:@"<br/>"];
+
         [htmlCode appendString:[self getHtmlForLink:link withTag:NSBundleLocalizedString(@"mRSS_readMoreLink", @"Read more...")]];
+        
+        [mailSharingHtmlCode appendString:[self getHtmlForLink:link withTag:NSBundleLocalizedString(@"mRSS_readMoreLink", @"Read more...")]];
+      }
       
       //Empirically detected that the width of webView is about 300 pts
       CGFloat maxImageWidth = self.view.frame.size.width - 20.0f;
@@ -925,154 +807,152 @@ reloading;
       //let us use some JS to adjust the width
       NSString *webVCContent = [NSString stringWithFormat:kImagesWidthsAdjustingFrame, maxImageWidth, htmlCode];
       
-      webVC.content = webVCContent;
+      detailsContent = webVCContent;
+      
+      mailSharingContent = [NSString stringWithFormat:kImagesWidthsAdjustingFrame, maxImageWidth, mailSharingHtmlCode];
     }
   }
   else
   {
-      // creating html code for manually entered news:
-    self.smsText = [NSString stringWithFormat:@"%@ %@\n %@", NSBundleLocalizedString(@"mRSS_sharingMessage", @"I just read excellent news!"),
-                    [arrElement objectForKey:@"title"],
-                    (szDescription ? [szDescription htmlToNewLinePreservingTextFast] : @"")];
+    NSString *descriptionText = szDescription ? szDescription : @"";
     
-    NSString *date=[arrElement objectForKey:@"disp_date"];
+      // creating html code for manually entered news:
+    detailsVC.smsSharingText = [NSString stringWithFormat:@"%@ %@\n %@", NSBundleLocalizedString(@"mRSS_sharingMessage", @"I just read excellent news!"),
+                    arrElement[@"title"],
+                    descriptionText];
+    
+    NSString *date=arrElement[@"disp_date"];
 		if ( !date )
       date=@"";
     
-    NSString *description_text = szDescription ? [szDescription htmlToNewLinePreservingTextFast] : @"";
-    if(description_text.length){
-      description_text = [description_text stringByReplacingOccurrencesOfString:@"\n" withString:@"<br>"];
-    }
-    NSString *imageURL = [arrElement objectForKey:@"url"];
-    NSString *imageElement = [imageURL length] ?
-    [NSString stringWithFormat:@"<img src=\"%@\" height=\"150\" border=\"0\" align=\"left\" style=\"margin-right:5px;\"/>", imageURL] :
-    @"";
+    NSString *mailSharingImageURL = arrElement[@"url"];
+    NSString *mailSharingImageElement = mailSharingImageURL.length ?
+    [NSString stringWithFormat:@"<img src=\"%@\" height=\"150\" border=\"0\" align=\"left\" style=\"margin-right:5px;\"/>", mailSharingImageURL] : @"";
     
-    NSString *htmlCode = [NSString stringWithFormat:@"<style>a { text-decoration: none; color:#3399FF;}</style><span style='font-family:Helvetica; font-size:16px; font-weight:bold;'>%@</span><br /><span style='font-family:Helvetica; font-size:12px;  color:#555555;' >%@</span><br /><br />%@%@", [arrElement objectForKey:@"title"], [date stringByReplacingOccurrencesOfString:@"+0000" withString:@""], imageElement, description_text];
+     NSString *mailSharingHtmlCode = [NSString stringWithFormat:@"<style>a { text-decoration: none; color:#3399FF;}</style><span style='font-family:Helvetica; font-size:16px; font-weight:bold;'>%@</span><br /><span style='font-family:Helvetica; font-size:12px;  color:#555555;' >%@</span><br /><br />%@%@", arrElement[@"title"], [date stringByReplacingOccurrencesOfString:@"+0000" withString:@""], mailSharingImageElement, descriptionText];
+    
+    mailSharingContent = mailSharingHtmlCode;
     
     
-		webVC.content = htmlCode;
+    NSString *htmlCode = [NSString stringWithFormat:@"<style>body {background: #%@; font-family:Helvetica; font-size:15px; color:#%@; margin-left: 15px;margin-right: 15px;} a { text-decoration: none; color:#%@;}</style>%@", backgroundHex, textColorHex, anchorColorHex, descriptionText];
+    
+    
+		detailsContent = htmlCode;
   }
   
     // adding share button (if it need)
-  if ( shareEMail || shareSMS )
+  if ( _shareEMail || _shareSMS )
   {
-    self.szShareHTML = [[NSString stringWithFormat:@"<span style='font-family:Helvetica; font-size:14px;'>%@</span><br /><br />", NSBundleLocalizedString(@"mRSS_sharingMessage", @"I just read excellent news!")] stringByAppendingString:webVC.content];
+    detailsVC.mailSharingText = [[NSString stringWithFormat:@"<span style='font-family:Helvetica; font-size:14px;'>%@</span><br /><br />", NSBundleLocalizedString(@"mRSS_sharingMessage", @"I just read excellent news!")] stringByAppendingString:mailSharingContent];
+  }
+
+  detailsContent = [self removeHeaderImageFromContent:detailsContent imageUrl:dict[@"headerImageUrl"]];
+  
+  
+  BOOL showUsualDescription = YES;
+  if(link)
+  {
+    NSRange pos = [link rangeOfString:@"youtu"];
+    if ( pos.location != NSNotFound )
+    {
+      NSString *youtubeDescription = dict[@"youtubeDescription"];
+      
+      detailsVC.content = [NSString stringWithFormat:@"<style>body {background: #%@; font-family:Helvetica; font-size:15px; color:#%@; margin-left: 15px;margin-right: 15px;} a { text-decoration: none; color:#%@;}</style>%@", backgroundHex, textColorHex, anchorColorHex, youtubeDescription];
+      
+      showUsualDescription = NO;
+    }
+
+  }
+  
+  if(showUsualDescription == YES)
+  {
+    detailsVC.content = detailsContent;
+  }
+  
+  NSArray *links = [self getLinksFromContent:detailsContent];
+  detailsVC.contentLinks = links;
+  
+  detailsVC.navBarTitle = self.navigationItem.title;
+  
+  [self.navigationController pushViewController:detailsVC animated:YES];
+}
+
+- (NSString *) removeHeaderImageFromContent:(NSString *)content imageUrl:(NSString *)imageUrl {
+  
+  NSString *resultContent = [NSString stringWithString:content];//[content copy];
+
+  
+  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<img[^>]*>" options:NSRegularExpressionCaseInsensitive error:nil];
+  //NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<img [^>]*src=[\"|']([^\"|']+)" options:NSRegularExpressionCaseInsensitive error:nil];
+  
+   NSArray *arrayOfAllMatches = [regex matchesInString:content options:0 range:NSMakeRange(0, content.length)];
+  
+  for(NSTextCheckingResult *result in arrayOfAllMatches)
+  {
+    NSRange capture = [result rangeAtIndex:0];
+    NSString *currentUrlString = [content substringWithRange:capture];
     
-    UIBarButtonItem *anotherButton = [[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
-                                                                                    target:self
-                                                                                    action:@selector(showAction)] autorelease];
-    webVC.navigationItem.rightBarButtonItem = anotherButton;
-    webVC.showTBarOnNextStep = YES;
-    webVC.withoutTBar        = YES;
+    NSRange range = [currentUrlString rangeOfString: imageUrl];
+    BOOL found = (range.location != NSNotFound);
+    
+      if(found)
+      {
+        NSString *matchText = [resultContent substringWithRange:result.range];
+        resultContent = [resultContent stringByReplacingOccurrencesOfString:matchText
+                                             withString:@""];
+      }
   }
-  webVC.showTabBar                = NO;
-  webVC.scalesPageToFitOnNextStep = YES;
-  [webVC setInputTitle: self.navigationItem.title];
-  [self.navigationController pushViewController:webVC animated:YES];
+  return resultContent;
 }
 
-
-
-#pragma mark -
-#pragma mark Actions
-
--(void)showAction
-{
-	UIActionSheet *actionSheet = [[UIActionSheet alloc] initWithTitle:nil
-                                                           delegate:self
-                                                  cancelButtonTitle:nil
-                                             destructiveButtonTitle:nil
-                                                  otherButtonTitles:nil];
-  if ( shareEMail )
-    [actionSheet addButtonWithTitle:NSBundleLocalizedString(@"mRSS_shareEmail", @"Share via EMail")];
-  if ( shareSMS )
-    [actionSheet addButtonWithTitle:NSBundleLocalizedString(@"mRSS_shareSMS", @"Share via SMS")];
-  actionSheet.destructiveButtonIndex = [actionSheet addButtonWithTitle:NSBundleLocalizedString(@"mRSS_shareCancel", @"Cancel")];
-	actionSheet.actionSheetStyle = UIActionSheetStyleBlackTranslucent;
-	if ( actionSheet.numberOfButtons > 1 )
-    [actionSheet showInView:[self.navigationController view]];
-	[actionSheet release];
-}
-
-- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex
-{
-	NSString *title=[actionSheet buttonTitleAtIndex:buttonIndex];
-	if ([title isEqualToString:NSBundleLocalizedString(@"mRSS_shareEmail", @"Share via EMail")])
-	{
-    [self performSelector:@selector(callMailComposer) withObject:nil afterDelay:0.5f];
-	}
-	else if ([title isEqualToString:NSBundleLocalizedString(@"mRSS_shareSMS", @"Share via SMS")])
-	{
-    [self performSelector:@selector(callSMSComposer) withObject:nil afterDelay:0.5f];
-	}
-}
-
-
-- (void)callMailComposer
-{
-  [functionLibrary callMailComposerWithRecipients:nil
-                                       andSubject:NSBundleLocalizedString(@"mRSS_sharingEmailSubject", @"Excellent news")
-                                          andBody:self.szShareHTML
-                                           asHTML:YES
-                                   withAttachment:nil
-                                         mimeType:nil
-                                         fileName:nil
-                                   fromController:self
-                                         showLink:showLink];
-}
-
-- (void)callSMSComposer
-{
-  [functionLibrary callSMSComposerWithRecipients:nil
-                                         andBody:self.smsText
-                                  fromController:self];
-}
-
-
-- (void)messageComposeViewController:(MFMessageComposeViewController *)controller
-                 didFinishWithResult:(MessageComposeResult)composeResult
-{
-  if ( composeResult == MessageComposeResultFailed )
+- (NSArray *) getLinksFromContent:(NSString *)content {
+  
+  NSMutableArray *links = [NSMutableArray array];
+  
+  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<a[^>]+href=\"(.*?)\"[^>]*>.*?</a>" options:NSRegularExpressionCaseInsensitive error:nil];
+  NSArray *arrayOfAllMatches = [regex matchesInString:content options:0 range:NSMakeRange(0, content.length)];
+  
+  if(arrayOfAllMatches && arrayOfAllMatches.count)
   {
-    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:NSLocalizedString(@"general_sendingSMSFailedAlertTitle", @"Error sending sms") //@"Error sending sms"
-                                                    message:NSLocalizedString(@"general_sendingSMSFailedAlertMessage", @"Error sending sms") //@"Error sending sms"
-                                                   delegate:nil
-                                          cancelButtonTitle:NSLocalizedString(@"general_sendingSMSFailedAlertOkButtonTitle", @"OK") //@"OK"
-                                          otherButtonTitles:nil];
-    [alert show];
-    [alert release];
+    for (NSTextCheckingResult *result in arrayOfAllMatches)
+    {
+      if(result.numberOfRanges == 2)
+      {
+        NSRange capture = [result rangeAtIndex:1];
+        NSString *urlString = [content substringWithRange:capture];
+        
+        [links addObject:urlString];
+      }
+    }
   }
-  [self dismissModalViewControllerAnimated:YES];
+  
+  return links;
 }
 
-- (void)mailComposeController:(MFMailComposeViewController *)controller
-          didFinishWithResult:(MFMailComposeResult)composeResult
-                        error:(NSError *)error
+- (NSString *)hexStringFromColor:(UIColor *)color
 {
-  if ( composeResult == MFMailComposeResultFailed )
-  {
-    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:NSLocalizedString(@"general_sendingEmailFailedAlertTitle", @"Error sending email") //@"Error sending sms"
-                                                    message:NSLocalizedString(@"general_sendingEmailFailedAlertMessage", @"Error sending email") //@"Error sending sms"
-                                                   delegate:nil
-                                          cancelButtonTitle:NSLocalizedString(@"general_sendingEmailFailedAlertOkButtonTitle", @"OK") //@"OK"
-                                          otherButtonTitles:nil];
-    [alert show];
-    [alert release];
-  }
-  [self dismissModalViewControllerAnimated:YES];
+  const CGFloat *components = CGColorGetComponents(color.CGColor);
+  
+  CGFloat r = components[0];
+  CGFloat g = components[1];
+  CGFloat b = components[2];
+  
+  return [NSString stringWithFormat:@"%02lX%02lX%02lX",
+          lroundf(r * 255),
+          lroundf(g * 255),
+          lroundf(b * 255)];
 }
-
 
 #pragma mark - Parsing
+
 - (void)parseXMLWithData:(NSData *)data
 {
 	[self.arr removeAllObjects];
     //you must then convert the path to a proper NSURL or it won't work
-  NSXMLParser *rssParser = [[[NSXMLParser alloc] initWithData:data] autorelease];
+  NSXMLParser *rssParser = [[NSXMLParser alloc] initWithData:data];
 	
     // Set self as the delegate of the parser so that it will receive the parser delegate methods callbacks.
-  [rssParser setDelegate:self];
+  rssParser.delegate = self;
 	
     // Depending on the XML document you're parsing, you may want to enable these features of NSXMLParser.
   [rssParser setShouldProcessNamespaces:NO];
@@ -1087,210 +967,219 @@ reloading;
     NSLog(@"Parsing Error: %@", rssParser.parserError);
   }
 }
+
 - (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName
   namespaceURI:(NSString *)namespaceURI
  qualifiedName:(NSString *)qName
     attributes:(NSDictionary *)attributeDict
 {
-  if (!pool)
-    pool = [[NSAutoreleasePool alloc] init];
-	self.currentElement = [[elementName mutableCopy] autorelease];
+	self.currentElement = [elementName mutableCopy];
 	if ([elementName isEqualToString:@"item"] || [elementName isEqualToString:@"entry"])
   {
 		[self.arr addObject:[NSMutableDictionary dictionary]];
 	}
 	else if ([elementName isEqualToString:@"link"])
 	{
-		NSMutableString *link=[[[attributeDict objectForKey:@"href"] mutableCopy] autorelease];
+		NSMutableString *link=[attributeDict[@"href"] mutableCopy];
 		if (link&&
-       !([[self.arr lastObject] objectForKey:@"link"]&&[attributeDict objectForKey:@"rel"]&&[[attributeDict objectForKey:@"rel"] isEqualToString:@"image"])) //to avoid situations where link replaces with next image link
-      [[self.arr lastObject] setObject:link forKey:@"link"];
+       !((self.arr).lastObject[@"link"]&&attributeDict[@"rel"]&&[attributeDict[@"rel"] isEqualToString:@"image"])) //to avoid situations where link replaces with next image link
+      (self.arr).lastObject[@"link"] = link;
     
-    if ([attributeDict objectForKey:@"rel"]&&[[attributeDict objectForKey:@"rel"] isEqualToString:@"image"])
-      [[self.arr lastObject] setObject:link forKey:@"url"];
+    if (attributeDict[@"rel"]&&[attributeDict[@"rel"] isEqualToString:@"image"])
+      (self.arr).lastObject[@"url"] = link;
     
 	}
   else if ([elementName isEqualToString:@"img"])
 	{
     if (attributeDict)
     {
-      NSString *imgLnk=[attributeDict objectForKey:@"src"];
-      if (imgLnk) [[self.arr lastObject] setObject:imgLnk forKey:@"url"];
+      NSString *imgLnk=attributeDict[@"src"];
+      if (imgLnk) (self.arr).lastObject[@"url"] = imgLnk;
     }
 	}
   else if ([elementName isEqualToString:@"media:content"])
 	{
     if (attributeDict)
     {
-      NSString *mediaType=[attributeDict objectForKey:@"medium"];
-      if (mediaType) [[self.arr lastObject] setObject:mediaType forKey:@"mediaType"];
+      NSString *mediaType=attributeDict[@"medium"];
+      if (mediaType) (self.arr).lastObject[@"mediaType"] = mediaType;
       
-      NSString *mediaLnk=[attributeDict objectForKey:@"url"];
-      if (mediaLnk) [[self.arr lastObject] setObject:mediaLnk forKey:@"mediaURL"];
+      NSString *mediaLnk=attributeDict[@"url"];
+      if (mediaLnk) (self.arr).lastObject[@"mediaURL"] = mediaLnk;
     }
-	}
+  }
   else if ([elementName isEqualToString:@"media:thumbnail"])
 	{
     if (attributeDict)
     {
-      NSString *imgLnk=[attributeDict objectForKey:@"url"];
-      if (imgLnk) [[self.arr lastObject] setObject:imgLnk forKey:@"mediaThumbnail"];
+      NSString *imgLnk=attributeDict[@"url"];
+      if (imgLnk) (self.arr).lastObject[@"mediaThumbnail"] = imgLnk;
     }
-	}
+  }
+  else if ([elementName isEqualToString:@"media:description"])
+  {
+    NSMutableString *mediaDescription = [NSMutableString stringWithString:@""];
+    (self.arr).lastObject[@"mediaDescription"] = mediaDescription;
+
+  }
   else if ([elementName isEqualToString:@"media:player"])
 	{
     if (attributeDict)
     {
-      NSString *imgLnk=[attributeDict objectForKey:@"url"];
-      if (imgLnk) [[self.arr lastObject] setObject:imgLnk forKey:@"mediaPlayer"];
+      NSString *imgLnk=attributeDict[@"url"];
+      if (imgLnk) (self.arr).lastObject[@"mediaPlayer"] = imgLnk;
     }
 	}
   else if ([elementName isEqualToString:@"enclosure"])
 	{
     if (attributeDict)
     {
-      NSString *mediaType=[attributeDict objectForKey:@"type"];
-      if (mediaType) [[self.arr lastObject] setObject:mediaType forKey:@"mediaType"];
+      NSString *mediaType=attributeDict[@"type"];
+      if (mediaType) (self.arr).lastObject[@"mediaType"] = mediaType;
       
-      NSString *mediaLnk=[attributeDict objectForKey:@"url"];
-      if (mediaLnk) [[self.arr lastObject] setObject:mediaLnk forKey:@"enclosureURL"];
+      NSString *mediaLnk=attributeDict[@"url"];
+      if (mediaLnk) (self.arr).lastObject[@"enclosureURL"] = mediaLnk;
     }
 	}
   else if ([elementName isEqualToString:@"rss"])
 	{
     if (attributeDict)
     {
-      NSString *mediaNamespaces=[attributeDict objectForKey:@"xmlns:media"];
-      if (mediaNamespaces) mediaRSS = true;
+      NSString *mediaNamespaces=attributeDict[@"xmlns:media"];
+      if (mediaNamespaces) _mediaRSS = true;
     }
 	}
 }
 
 - (void)parser:(NSXMLParser *)parser didEndElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qName{
-	if ([elementName isEqualToString:@"item"] || [elementName isEqualToString:@"entry"])
-	{
-		NSString *title=[[self.arr lastObject] objectForKey:@"title"];
-		if (title)
-		{
-			[[self.arr lastObject] setObject:[title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] forKey:@"title"];
-		}
-    NSString *content = [[self.arr lastObject] objectForKey:@"content"];
-    
-    if (content)
-    {
-      NSString *url=[mNewsViewController getAttribFromText:content WithAttr:@"src="];
-      if (url)
-        [[self.arr lastObject] setObject:url forKey:@"url"];
-    }
-	}
-  if (pool)
+  
+  if ([elementName isEqualToString:@"item"] || [elementName isEqualToString:@"entry"])
   {
-    [pool drain];
-    pool=nil;
+    NSString *title=(self.arr).lastObject[@"title"];
+    if (title)
+    {
+      (self.arr).lastObject[@"title"] = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+    NSString *url=[mNewsViewController getAttribFromText:(self.arr).lastObject[@"description"] WithAttr:@"src="];
+    if (url)
+      (self.arr).lastObject[@"url"] = url;
   }
 }
 
 - (void)parser:(NSXMLParser *)parser foundCharacters:(NSString *)string{
-    // save the characters for the current item...
-    if ([self.currentElement isEqualToString:@"title"])
-    {
-      NSMutableString *title=[[self.arr lastObject] objectForKey:@"title"];
-      if (title)
-      {
-        [title appendString:string];
-        [[self.arr lastObject] setObject:title forKey:@"title"];
-      }
-      else [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"title"];
-      
-    } else if ([self.currentElement isEqualToString:@"content"])
-    {
-      NSMutableString *description=[[self.arr lastObject] objectForKey:@"description"];
-      if (description)
-      {
-        [description appendString:string];
-        [[self.arr lastObject] setObject:description forKey:@"description"];
-      }
-      else
-        [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"description"];
-    }
-    else if ([self.currentElement isEqualToString:@"content:encoded"])
-    {
-      NSMutableString *description=[[self.arr lastObject] objectForKey:@"content_encoded"];
-      if (description)
-      {
-        [description appendString:string];
-        [[self.arr lastObject] setObject:description forKey:@"content_encoded"];
-      }
-      else
-        [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"content_encoded"];
-      
-      [[self.arr lastObject] setObject:[[self.arr lastObject] objectForKey:@"content_encoded"] forKey:@"description"];
-    }
-    else if ([self.currentElement isEqualToString:@"description"])
-    {
-      if ([[self.arr lastObject] objectForKey:@"description"])
-      {
-        NSMutableString *tmpString = [[NSMutableString alloc] initWithString:string];
-        NSMutableString *tmpDescription = [[NSMutableString alloc] initWithString:[[self.arr lastObject] objectForKey:@"description"]];
-        [tmpDescription appendString:tmpString];
-       
-        NSRange tmpRange;
-        tmpRange.location = 0;
-        tmpRange.length = tmpString.length;
-        [tmpDescription replaceOccurrencesOfString:@"&nbsp;" withString:@"" options:NSCaseInsensitiveSearch range:tmpRange];
-        [[self.arr lastObject] setObject:tmpDescription forKey:@"description"];
-        
-        [tmpDescription release];
-        tmpDescription = nil;
-        
-        [tmpString release];
-        tmpString = nil;
-      }
-      else
-        [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"description"];
-    }
+  
+  // save the characters for the current item...
+  if ([self.currentElement isEqualToString:@"media:description"])
+  {
     
-    else if ([self.currentElement isEqualToString:@"summary"])
+    NSMutableString *descr= (self.arr).lastObject[@"mediaDescription"];
+    if (descr)
     {
-      NSMutableString *description=[[self.arr lastObject] objectForKey:@"description"];
-      if (description)
-      {
-        [description appendString:string];
-        [[self.arr lastObject] setObject:description forKey:@"description"];
-      }
-      else
-        [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"description"];
+      [descr appendString:string];
+      (self.arr).lastObject[@"mediaDescription"] = descr;
     }
-    else if ([self.currentElement isEqualToString:@"link"])
+    else (self.arr).lastObject[@"mediaDescription"] = [string mutableCopy];
+    
+  }
+  else if ([self.currentElement isEqualToString:@"title"])
+  {
+    NSMutableString *title=(self.arr).lastObject[@"title"];
+    if (title)
     {
-      NSMutableString *link=[[self.arr lastObject] objectForKey:@"link"];
-      if (link)
-      {
-        [link appendString:string];
-        [[self.arr lastObject] setObject:link forKey:@"link"];
-      }
-      else
-        [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"link"];
+      [title appendString:string];
+      (self.arr).lastObject[@"title"] = title;
+    }
+    else (self.arr).lastObject[@"title"] = [string mutableCopy];
+    
+  } else if ([self.currentElement isEqualToString:@"content"])
+  {
+    NSMutableString *description=(self.arr).lastObject[@"description"];
+    if (description)
+    {
+      [description appendString:string];
+      (self.arr).lastObject[@"description"] = description;
+    }
+    else
+      (self.arr).lastObject[@"description"] = [string mutableCopy];}
+  
+  else if ([self.currentElement isEqualToString:@"content:encoded"])
+  {
+    NSMutableString *description=(self.arr).lastObject[@"content_encoded"];
+    if (description)
+    {
+      [description appendString:string];
+      (self.arr).lastObject[@"content_encoded"] = description;
+    }
+    else
+      (self.arr).lastObject[@"content_encoded"] = [string mutableCopy];
+    
+    (self.arr).lastObject[@"description"] = (self.arr).lastObject[@"content_encoded"];
+  }
+  else if ([self.currentElement isEqualToString:@"description"])
+  {
+    if ((self.arr).lastObject[@"description"])
+    {
+      NSMutableString *tmpString = [[NSMutableString alloc] initWithString:string];
+      NSMutableString *tmpDescription = [[NSMutableString alloc] initWithString:(self.arr).lastObject[@"description"]];
+      [tmpDescription appendString:tmpString];
       
-    } else if ([self.currentElement isEqualToString:@"pubDate"]||
-               [self.currentElement isEqualToString:@"dc:date"]||
-               [self.currentElement isEqualToString:@"updated"])
-    {
-      NSMutableString *date=[[self.arr lastObject] objectForKey:@"date"];
-      if (date)
-      {
-        [date appendString:string];
-        [[self.arr lastObject] setObject:date forKey:@"date"];
-      }
-      else
-        [[self.arr lastObject] setObject:[[string mutableCopy] autorelease] forKey:@"date"];
+      NSRange tmpRange;
+      tmpRange.location = 0;
+      tmpRange.length = tmpString.length;
+      [tmpDescription replaceOccurrencesOfString:@"&nbsp;" withString:@"" options:NSCaseInsensitiveSearch range:tmpRange];
+      
+      (self.arr).lastObject[@"description"] = tmpDescription;
+      
+      tmpDescription = nil;
+      
+      tmpString = nil;
     }
+    else
+      (self.arr).lastObject[@"description"] = [string mutableCopy];
+  }
+  
+  else if ([self.currentElement isEqualToString:@"summary"])
+  {
+    NSMutableString *description=(self.arr).lastObject[@"description"];
+    if (description)
+    {
+      [description appendString:string];
+      (self.arr).lastObject[@"description"] = description;
+    }
+    else
+      (self.arr).lastObject[@"description"] = [string mutableCopy];
+  }
+  else if ([self.currentElement isEqualToString:@"link"])
+  {
+    NSMutableString *link=(self.arr).lastObject[@"link"];
+    if (link)
+    {
+      [link appendString:string];
+      (self.arr).lastObject[@"link"] = link;
+    }
+    else
+      (self.arr).lastObject[@"link"] = [string mutableCopy];
+    
+  } else if ([self.currentElement isEqualToString:@"pubDate"]||
+             [self.currentElement isEqualToString:@"dc:date"]||
+             [self.currentElement isEqualToString:@"updated"])
+  {
+    NSMutableString *date=(self.arr).lastObject[@"date"];
+    if (date)
+    {
+      [date appendString:string];
+      (self.arr).lastObject[@"date"] = date;
+    }
+    else
+      (self.arr).lastObject[@"date"] = [string mutableCopy];
+  }
 }
 
 - (void)parser:(NSXMLParser *)parser validationErrorOccurred:(NSError *)parseError
 {
   [parser abortParsing];
 }
+
 - (void)parserDidEndDocument:(NSXMLParser *)parser
 {
   [self fillTextDescription];
@@ -1304,59 +1193,81 @@ reloading;
 - (NSURL*) getCorrectImgUrlFromRssElement:(NSDictionary*)item {
   
   NSString *url_str=nil;
-  if (mediaRSS)
+  if (_mediaRSS)
   {
-    url_str=[[item objectForKey:@"mediaThumbnail"] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    url_str=[item[@"mediaThumbnail"] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
     
     url_str=[url_str stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
   }
-  if (!(mediaRSS) || (url_str==nil))
+  
+
+  NSString *link = item[@"link"];
+  if(link && [link rangeOfString:@"http://www.youtu"].location != NSNotFound)
   {
+    url_str=[item[@"mediaThumbnail"] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    
+    url_str=[url_str stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+  }
+  else
+  {
+    if (!(_mediaRSS) || (url_str==nil))
+    {
       // Bug from web: for manually entered news (without images) image url is hostname (http://ibuildapp.com/, e.t.c).
       // Get round it!
+      
+      NSString *hostname = appIBuildAppHostName();
+      NSString *item_url = item[@"url"];
+      
+      NSString *url = [NSString stringWithFormat:@"http://%@/", hostname];
+      
+      if (![url isEqualToString:item_url])
+      {
+        url_str=[item_url stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+        url_str=[url_str stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+      }
+      else
+      {
+        // remove wrong value!
+        [item setValue:nil forKey:@"url"];
+      }
+    }
     
-    NSString *hostname = appIBuildAppHostName();
-    NSString *item_url = [item objectForKey:@"url"];
+    if ([item[@"mediaType"] isEqualToString:@"image"] && item[@"mediaURL"])
+      url_str = item[@"mediaURL"];
     
-    NSString *url = [NSString stringWithFormat:@"http://%@/", hostname];
+    if ((item[@"content_encoded"]) && ([_RSSPath rangeOfString:@"feeds.feedburner.com"].location != NSNotFound)) {
+      
+      NSString *stringRegex = @"<img [^>]*src=[\"|']([^\"|']+)";
+      
+      NSString *description = item[@"content_encoded"];
+      
+      NSError *error = NULL;
+      NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:stringRegex
+                                                                             options:NSRegularExpressionCaseInsensitive
+                                                                               error:&error];
+      NSArray *matches = [regex matchesInString:description options:NSRegularExpressionCaseInsensitive range:NSMakeRange(0, description.length)];
+      
+      if (matches.count)
+        url_str = [description substringWithRange:[matches[0] rangeAtIndex:1]];
+      
+    }
     
-    if (![url isEqualToString:item_url])
+    //---
+    if(url_str == nil)
     {
-      url_str=[item_url stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+      url_str=[item[@"enclosureURL"] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+      
       url_str=[url_str stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
     }
-    else
-    {
-        // remove wrong value!
-      [item setValue:nil forKey:@"url"];
-    }
+    //---
   }
-  
-  if ([[item objectForKey:@"mediaType"] isEqualToString:@"image"] && [item objectForKey:@"mediaURL"])
-    url_str = [item objectForKey:@"mediaURL"];
-  
-  if (([item objectForKey:@"content_encoded"]) && ([RSSPath rangeOfString:@"feeds.feedburner.com"].location != NSNotFound)) {
-    
-    NSString *stringRegex = @"<img [^>]*src=[\"|']([^\"|']+)";
-    
-    NSString *description = [item objectForKey:@"content_encoded"];
-    
-    NSError *error = NULL;
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:stringRegex
-                                                                           options:NSRegularExpressionCaseInsensitive
-                                                                             error:&error];
-    NSArray *matches = [regex matchesInString:description options:NSRegularExpressionCaseInsensitive range:NSMakeRange(0, description.length)];
-    
-    if (matches.count)
-      url_str = [description substringWithRange:[[matches objectAtIndex:0] rangeAtIndex:1]];
 
-  }
   
 	if (url_str)
   {
     
     NSURL *url;
-    (RSSPath.length) ? (url = [NSURL URLWithString:RSSPath]) : (url = [NSURL URLWithString:url_str]);
+    (_RSSPath.length) ? (url = [NSURL URLWithString:_RSSPath]) : (url = [NSURL URLWithString:url_str]);
     
     NSString *scheme = url.scheme;
     
@@ -1381,27 +1292,32 @@ reloading;
   }
 }
 
--(void)setImgSrc:(NSString*)imgSrc forRssItem:(NSMutableDictionary*)item {
-    NSString *url_str=nil;
-    if (mediaRSS)
+-(void)setImgSrc:(NSString*)imgSrc forRssItem:(NSMutableDictionary*)item
+{
+  if(imgSrc == nil)
+  {
+    imgSrc = @"";
+  }
+  
+  NSString *url_str=nil;
+    if (_mediaRSS)
     {
-      [item setObject:imgSrc forKey:@"mediaThumbnail"];
+      item[@"mediaThumbnail"] = imgSrc;
     }
-    if (!(mediaRSS) || (url_str==nil))
+    if (!(_mediaRSS) || (url_str==nil))
     {
         [item setValue:imgSrc forKey:@"url"];
     }
     
-    if ([[item objectForKey:@"mediaType"] isEqualToString:@"image"] && [item objectForKey:@"mediaURL"])
-        [item setObject:imgSrc forKey:@"mediaURL"];
+    if ([item[@"mediaType"] isEqualToString:@"image"] && item[@"mediaURL"])
+        item[@"mediaURL"] = imgSrc;
     
-    if (([item objectForKey:@"content_encoded"]) && ([RSSPath rangeOfString:@"feeds.feedburner.com"].location != NSNotFound)) {
-        [item setObject:imgSrc forKey:@"content_encoded"];
+    if ((item[@"content_encoded"]) && ([_RSSPath rangeOfString:@"feeds.feedburner.com"].location != NSNotFound)) {
+        item[@"content_encoded"] = imgSrc;
     }
 }
 
 + (NSString*)getAttribFromText:(NSString*)text WithAttr:(NSString*)attrib
-
 {
 	NSString *res=nil;
 	NSRange pos=[text rangeOfString:attrib];
@@ -1420,9 +1336,9 @@ reloading;
 		NSRange content;
 		content.location=pos.location+pos.length;
     
-		NSRange space=[text rangeOfString:separator options:NSCaseInsensitiveSearch range:NSMakeRange(pos.location+pos.length+1, [text length]-pos.location-pos.length-1)];
-		if (space.location==NSNotFound) space.location=[text length];
-		content.length=space.location-pos.location-[attrib length];
+		NSRange space=[text rangeOfString:separator options:NSCaseInsensitiveSearch range:NSMakeRange(pos.location+pos.length+1, text.length-pos.location-pos.length-1)];
+		if (space.location==NSNotFound) space.location=text.length;
+		content.length=space.location-pos.location-attrib.length;
 		res=[[text substringWithRange:content] stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\'\""]];
 	}
 	return res;
@@ -1432,7 +1348,7 @@ reloading;
 
 - (void)reverseRSS
 {
-  NSMutableArray* reversedArr = [NSMutableArray arrayWithCapacity:[self.arr count]];
+  NSMutableArray* reversedArr = [NSMutableArray arrayWithCapacity:(self.arr).count];
   NSEnumerator*   reverseEnumerator = [self.arr reverseObjectEnumerator];
   for (NSMutableDictionary *object in reverseEnumerator)
   {
@@ -1445,8 +1361,8 @@ reloading;
   {
     [self.arr addObject:object];
   }
-  
-  [self.tableView reloadData];
+
+  [self generateTableData];
 }
 
 - (NSString *)getCorrectURLString:(NSString *)urlString
@@ -1466,20 +1382,20 @@ reloading;
   NetworkStatus hostStatus = [self.hostReachable currentReachabilityStatus];
   
   if (hostStatus != NotReachable)
-    return [NSString stringWithFormat:@"<a href=%@>%@</a><br><br>", link, tag];
+    return [NSString stringWithFormat:@"<a href=\"%@\">%@</a><br><br>", link, tag];
   else
     return @"";
 }
 
 - (void)fillTextDescription
 {
-  for (int i=0; i<[self.arr count]; i++) {
+  for (int i=0; i<(self.arr).count; i++) {
     
-    NSString *st = [[[self.arr objectAtIndex:i] objectForKey:@"description"] htmlToTextFast];
+    NSString *st = [(self.arr)[i][@"description"] htmlToTextFast];
     
-    [[self.arr objectAtIndex:i] setObject:st?st:@"" forKey:@"description_text"];
+    (self.arr)[i][@"description_text"] = st?st:@"";
     
-    NSString *date_str=[[self.arr objectAtIndex:i] objectForKey:@"date"];
+    NSString *date_str=(self.arr)[i][@"date"];
     if (date_str)
     {
       NSDate *date = [functionLibrary dateFromInternetDateTimeString:[date_str stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]];
@@ -1488,15 +1404,14 @@ reloading;
         NSDateFormatter *dateFormat = [[NSDateFormatter alloc] init];
         [self setupDateFormatterForcingGMTAndHourFormat:dateFormat];
         
-        [[self.arr objectAtIndex:i] setObject:[dateFormat stringFromDate:date] forKey:@"date_text"];
-        [dateFormat release];
+        (self.arr)[i][@"date_text"] = [dateFormat stringFromDate:date];
       }
     }
   }
 }
 
-#pragma mark -
 #pragma mark Data Source Loading IURLLoaderDelegate
+
 - (void)didFinishLoading:(NSData *)data_
            withURLloader:(TURLLoader *)urlLoader
 {
@@ -1504,9 +1419,11 @@ reloading;
   self.downloadIndicator = nil;
   self.bFirstLoading = NO;                      /// reset first-load flag
   [[UIApplication sharedApplication] setNetworkActivityIndicatorVisible:NO];
-
+  
   [self parseXMLWithData:data_];
-  [self.tableView reloadData];
+  
+  [self generateTableData];
+
   [self doneLoadingTableViewData];
 }
 
@@ -1518,19 +1435,17 @@ reloading;
   self.downloadIndicator = nil;
   self.bFirstLoading = NO;                      // reset flag bFirstLoading
   [[UIApplication sharedApplication] setNetworkActivityIndicatorVisible:NO];
-  UIAlertView *message = [[[UIAlertView alloc] initWithTitle:NSBundleLocalizedString(@"mRSS_errorLoadingRSSTitle", @"Error") //@"Error sending sms"
+  UIAlertView *message = [[UIAlertView alloc] initWithTitle:NSBundleLocalizedString(@"mRSS_errorLoadingRSSTitle", @"Error") //@"Error sending sms"
                                                      message:NSBundleLocalizedString(@"mRSS_errorLoadingRSSMessage", @"Cannot load RSS feed") //@"Error sending sms"
                                                     delegate:nil
                                            cancelButtonTitle:NSBundleLocalizedString(@"mRSS_errorLoadingRSSOkButtonTitle", @"OK") //@"OK"
-                                           otherButtonTitles:nil] autorelease];
+                                           otherButtonTitles:nil];
   [message show];
 
   self.reloading = NO;
   [self doneLoadingTableViewData];
 }
 
-
-#pragma mark -
 #pragma mark Data Source Loading / Reloading Methods
 
 - (void)reloadTableViewDataSource
@@ -1543,8 +1458,8 @@ reloading;
   if ( self.bFirstLoading )
   {
     [self.downloadIndicator removeFromSuperview];
-    self.downloadIndicator = [[[TDownloadIndicator alloc] initWithFrame:self.view.bounds] autorelease];
-    [self.downloadIndicator createViews];
+    self.downloadIndicator = [[TDownloadIndicator alloc] initWithFrame:self.view.bounds];
+    [self.downloadIndicator createViewsWithBackgroundColor:_colorSkin.color1];//createViews];
     
     self.downloadIndicator.autoresizesSubviews = YES;
     self.downloadIndicator.autoresizingMask    = UIViewAutoresizingFlexibleWidth |
@@ -1556,9 +1471,9 @@ reloading;
   [[UIApplication sharedApplication] setNetworkActivityIndicatorVisible:YES];
   
     // start async loading
-  TURLLoader *loader = [[[TURLLoader alloc] initWithURL:self.RSSPath
+  TURLLoader *loader = [[TURLLoader alloc] initWithURL:self.RSSPath
                                             cachePolicy:NSURLRequestReloadIgnoringCacheData
-                                        timeoutInterval:30.f] autorelease];
+                                        timeoutInterval:30.f];
   TURLLoader *pOldLoader = [[TDownloadManager instance] appendTarget:loader];
   if ( pOldLoader != loader )
   {
@@ -1573,7 +1488,6 @@ reloading;
 
 - (void)doneLoadingTableViewData
 {
-  self.tableView.separatorColor = [UIColor grayColor];
     //  model should call this when its done loading
 	self.reloading = NO;
     // unlock UI
@@ -1581,8 +1495,6 @@ reloading;
 	[self.refreshHeaderView egoRefreshScrollViewDataSourceDidFinishedLoading:self.tableView];
 }
 
-
-#pragma mark -
 #pragma mark UIScrollViewDelegate Methods
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView
@@ -1596,23 +1508,25 @@ reloading;
 	[self.refreshHeaderView egoRefreshScrollViewDidEndDragging:scrollView];
 }
 
-
 #pragma mark - EGORefreshTableHeaderDelegate Methods
+
 - (void)egoRefreshTableHeaderDidTriggerRefresh:(EGORefreshTableHeaderView*)view
 {
 	[self reloadTableViewDataSource];
 }
+
 - (BOOL)egoRefreshTableHeaderDataSourceIsLoading:(EGORefreshTableHeaderView*)view
 {
 	return self.reloading; // should return if data source model is reloading
 }
+
 - (NSDate*)egoRefreshTableHeaderDataSourceLastUpdated:(EGORefreshTableHeaderView*)view
 {
 	return [NSDate date]; // should return date data source was last changed
 }
 
-
 #pragma mark - Autorotate handlers
+
 -(BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
 {
   return UIInterfaceOrientationIsPortrait( toInterfaceOrientation );
@@ -1623,7 +1537,7 @@ reloading;
   return YES;
 }
 
-- (NSUInteger)supportedInterfaceOrientations
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
 {
   return UIInterfaceOrientationMaskPortrait |
   UIInterfaceOrientationMaskPortraitUpsideDown;
